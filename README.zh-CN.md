@@ -110,4 +110,4 @@ examples/                    带真实数字的案例复盘
 
 ## 许可证
 
-MIT，见 `LICENSE`。许可只覆盖代码，不授予任何声音、录音或表演的权利。
+MIT，见 `LICENSE`。许可只覆盖代码，不授予任何声音、录音或表演的权利；详见 `references/legal-and-ethics.md`。

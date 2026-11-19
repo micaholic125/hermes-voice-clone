@@ -128,3 +128,6 @@ right to use — your own recordings first.
 ## License
 
 MIT — see `LICENSE`.
+
+The licence covers the software only. It grants no rights to any voice, recording, or
+performance — see `references/legal-and-ethics.md`.
