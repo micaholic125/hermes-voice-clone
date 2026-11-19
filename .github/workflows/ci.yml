@@ -13,16 +13,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # The runtime imports torch/chatterbox, which are heavy; this job only proves
-      # every script parses and the CLI entry points respond.
+      # The runtime imports torch/chatterbox, far too heavy for CI. This job proves
+      # every script parses, the stdlib-only modules import, and no audio is tracked.
       - name: Byte-compile every script
         run: python -m compileall -q scripts
-      - name: CLI help (imports stdlib only)
+      - name: Stdlib-only modules import
         run: |
-          python scripts/voice_switch.py > /dev/null && exit 1 || true
-          python scripts/prepare_reference.py --help > /dev/null
-      - name: Reference file must never be committed
+          python -c "import sys; sys.path.insert(0, 'scripts'); import voice_config, voice_client, prepare_reference; print('imports ok')"
+      - name: Argument parsing responds
+        run: python scripts/prepare_reference.py --help > /dev/null
+      - name: No audio artefacts tracked
         run: |
-          if git ls-files | grep -qiE '\.(wav|mp3)$'; then
-            echo "audio artefacts must not be tracked"; exit 1
+          if git ls-files | grep -qiE '\.(wav|mp3|m4a|flac)$'; then
+            echo "audio artefacts must never be committed"; exit 1
           fi
+          echo "clean"
