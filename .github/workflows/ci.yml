@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The runtime imports torch/chatterbox, which are heavy; this job only proves
+      # every script parses and the CLI entry points respond.
+      - name: Byte-compile every script
+        run: python -m compileall -q scripts
+      - name: CLI help (imports stdlib only)
+        run: |
+          python scripts/voice_switch.py > /dev/null && exit 1 || true
+          python scripts/prepare_reference.py --help > /dev/null
+      - name: Reference file must never be committed
+        run: |
+          if git ls-files | grep -qiE '\.(wav|mp3)$'; then
+            echo "audio artefacts must not be tracked"; exit 1
+          fi

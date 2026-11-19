@@ -1,0 +1,18 @@
+# runtime artefacts
+venv/
+server.log
+*.wav
+*.mp3
+__pycache__/
+*.pyc
+
+# never commit a cloned reference or generated speech
+reference.wav
+reference*.wav
+probe*.mp3
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
