@@ -16,3 +16,6 @@ probe*.mp3
 .idea/
 .DS_Store
 Thumbs.db
+
+# disabled autostart entries live here, never in the Windows Startup folder
+startup-disabled/

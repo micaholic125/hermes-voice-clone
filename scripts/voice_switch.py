@@ -31,11 +31,17 @@ BASE = f"http://{cfg.HOST}:{cfg.PORT}"
 if os.name == "nt":
     STARTUP_DIR = Path(os.path.expandvars(
         r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"))
-    VBS_ON = STARTUP_DIR / f"{cfg.PROVIDER}-voice.vbs"
-    VBS_OFF = VBS_ON.with_suffix(".vbs.off")
+    VBS_NAME = f"{cfg.PROVIDER}-voice.vbs"
+    VBS_ON = STARTUP_DIR / VBS_NAME
+    # A disabled entry must LEAVE the Startup folder. Windows executes every file it
+    # finds there and asks "how do you want to open this?" for anything it cannot run,
+    # so a renamed *.vbs.off left in place nags the user on every single boot.
+    DISABLED_DIR = cfg.ROOT / "startup-disabled"
+    VBS_OFF = DISABLED_DIR / VBS_NAME
+    LEGACY_VBS_OFF = STARTUP_DIR / (VBS_NAME + ".off")
 else:
     STARTUP_DIR = None
-    VBS_ON = VBS_OFF = None
+    VBS_ON = VBS_OFF = LEGACY_VBS_OFF = None
 
 
 def run(cmd: list[str], timeout: int = 180) -> tuple[int, str]:
@@ -144,24 +150,36 @@ def startup_state() -> str:
     return "absent"
 
 
+def _migrate_legacy() -> None:
+    """Older builds renamed the entry to *.vbs.off *inside* Startup; move it out once."""
+    if LEGACY_VBS_OFF and LEGACY_VBS_OFF.exists():
+        DISABLED_DIR.mkdir(parents=True, exist_ok=True)
+        if VBS_OFF.exists():
+            VBS_OFF.unlink()
+        shutil.move(str(LEGACY_VBS_OFF), str(VBS_OFF))
+
+
 def set_startup(enabled: bool) -> None:
     if VBS_ON is None:
         return
     STARTUP_DIR.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy()
     if enabled:
+        DISABLED_DIR.mkdir(parents=True, exist_ok=True)
+        if VBS_OFF.exists() and not VBS_ON.exists():
+            shutil.move(str(VBS_OFF), str(VBS_ON))  # may cross drives: not a rename
         if not VBS_ON.exists():
             VBS_ON.write_text(
                 "' Start the clone voice server hidden at logon.\n"
                 "Set sh = CreateObject(\"WScript.Shell\")\n"
                 f'sh.Run """{sys.executable}"" ""{HERE / "voice_server.py"}""", 0, False\n',
                 encoding="utf-8")
-        if VBS_OFF.exists():
-            VBS_OFF.unlink()
     else:
         if VBS_ON.exists():
+            DISABLED_DIR.mkdir(parents=True, exist_ok=True)
             if VBS_OFF.exists():
                 VBS_OFF.unlink()
-            VBS_ON.rename(VBS_OFF)
+            shutil.move(str(VBS_ON), str(VBS_OFF))
 
 
 def do_status() -> int:
