@@ -62,4 +62,5 @@ you asked for. Empirically: ≥0.75 is clean, 0.55–0.75 is usable with a sligh
 - Music bleeding through the reference (metallic sheen).
 - A different speaker in the reference (voice averages two people).
 - The wrong accent entirely (zero-shot clones timbre, not a regional accent it never heard).
-- Non-native language text (the model hums; use the fallback).
+- Non-native accent: an English reference makes Chinese sound foreign. The router gets
+the words right; only a same-language reference fixes the accent.

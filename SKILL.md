@@ -40,8 +40,9 @@ Three constraints shaped it, and every design choice follows from them:
    lives in a resident server rather than a one-shot script.
 2. **Hermes kills a command provider at 120 s**, so the retry loop is capped at
    `MAX_SECONDS` (70 by default) and the service must already be warm.
-3. **Zero-shot models degrade into humming** on text outside their language, so
-   CJK is detected and routed to a cloud voice instead of being fed to the clone.
+3. **A model only speaks what it was trained on.** English runs on the English-only
+   checkpoint; every other supported language is detected by script and routed to the
+   multilingual checkpoint with `language_id`. A cloud voice is only the last resort.
 
 ## Quickstart
 
@@ -60,6 +61,47 @@ venv/Scripts/python.exe scripts/prepare_reference.py source.mp4 --start 302 --en
 venv/Scripts/python.exe scripts/doctor.py
 venv/Scripts/python.exe scripts/voice_switch.py on
 ```
+
+## Cloning a non-English voice (Chinese, Japanese, Korean …)
+
+Same pipeline, three differences — and one of them is the reference clip.
+
+```bash
+# 1. Cut the reference from a speaker of THAT language, not an English one.
+#    Timbre transfers across languages; accent does not.
+python scripts/prepare_reference.py 中文素材.wav --target-language zh   # MATCH / MISMATCH
+
+# 2. Check the multilingual checkpoint is importable.
+python scripts/doctor.py          # look for "chatterbox.mtl_tts  PASS"
+
+# 3. Send the text. The server detects the script and routes automatically.
+python scripts/voice_switch.py on
+```
+
+What happens under the hood, in the log:
+
+```
+[voice] loading multilingual model on cuda
+[voice] multilingual model: loading (first use downloads ~3.7 GB)
+[voice] multilingual model ready
+[voice] take 1: 4.2s (expected 3.6s) similarity 0.97
+```
+
+Costs and limits you should state out loud to the user before they start:
+
+| Item | Value |
+|---|---|
+| First-use download | ~3.7 GB (only when a non-English request arrives) |
+| Extra VRAM | ~2 GB while resident; default swaps English ↔ multilingual (~30 s per swap) |
+| Quality gate | compares **characters** for CJK, words for space-delimited scripts |
+| Accent | an English reference speaking Chinese sounds foreign — say so up front |
+| Toggle | `VOICE_MULTILINGUAL=0` restores the old behaviour (cloud fallback for CJK) |
+
+If the user wants the best Chinese rather than a Chinese-accented reuse of an English
+voice, tell them the honest options: (a) a Chinese reference clip, (b) a Chinese-native
+backend such as CosyVoice2 / GPT-SoVITS substituted at `get_model()` in
+`voice_server.py`. Do not promise "same voice, perfect Mandarin" — that combination is
+not physically available with zero-shot cloning.
 
 ## Operations
 
@@ -88,8 +130,11 @@ Exit code `0` means the requested state was reached and verified. **Always run
 ## Red lines
 
 - Never hand-edit `config.yaml`; use `hermes config set`.
-- Never feed CJK to the clone model — the fallback exists precisely because the
-  model hums instead of speaking it.
+- Never send a language to a checkpoint that does not support it: an English model fed
+  Chinese hums, it does not error. Routing is automatic — do not bypass `detect_language`.
+- **Use a reference clip in the same language as the output.** Cloning transfers timbre
+  across languages, not accent: an English reference reading Chinese sounds like an
+  English speaker reading Chinese. See `references/pipeline.md`.
 - Never call the provider while the service is cold: the 120 s cap will kill it.
 - Never ship a reference clip cut from copyrighted film or a private recording
   without the rights — see `references/legal-and-ethics.md`.

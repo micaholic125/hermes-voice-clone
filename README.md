@@ -28,11 +28,45 @@ text ──► voice_client.py ──HTTP──► voice_server.py ──► mp3
 - **Quality gate.** Each take is transcribed back and compared with the input text.
   A take that loops, mumbles, or drifts outside a plausible duration is discarded and
   regenerated (up to 3 takes, capped at 70 s so Hermes' 120 s provider timeout never fires).
-- **Language guard.** Zero-shot models hum instead of speaking languages they were not
-  trained on. CJK text is detected and routed to a cloud voice rather than mangled.
+- **Language guard.** The clone speaks English and, through the multilingual
+  checkpoint bundled with the same package, 22 other languages (Chinese, Japanese,
+  Korean, Russian, Arabic, and more). English keeps the English-only model for the best
+  prosody; everything else is routed to the multilingual one automatically. A cloud voice
+  is used only if the multilingual model is unavailable.
 - **Resident service.** Model weights load once; each request is seconds, not minutes.
 - **Reversible.** `voice_switch.py off` puts Hermes back on Edge TTS and stops the
   service. Nothing is deleted.
+
+## Languages
+
+| What you send | Which model speaks | Quality |
+|---|---|---|
+| English | English checkpoint | best prosody |
+| Chinese, Japanese, Korean, Russian, Arabic, Hebrew, Greek, Hindi … | multilingual checkpoint (23 languages) | good, with a caveat below |
+| a language neither supports | cloud voice (optional fallback) | intelligible, wrong timbre |
+
+**Use a reference clip in the same language as the output.** This is the single
+biggest quality factor after the clip's cleanliness, and it is counter-intuitive:
+zero-shot cloning transfers the *timbre* across languages, but not the *accent*.
+An English reference reciting Chinese produces Chinese words in an English mouth —
+recognisable, clearly foreign. A Chinese reference gives a Chinese voice.
+
+The server routes by script, so you can mix languages in one session; the model
+swaps on demand (`VOICE_MAX_MODELS=1` keeps only one resident, which is what an
+8 GB card wants).
+
+Check it before you rely on it:
+
+```bash
+python prepare_reference.py 素材.wav --target-language zh   # warns on MISMATCH
+python doctor.py                                            # 'non-English' line states readiness
+```
+
+```yaml
+VOICE_MULTILINGUAL=1        # 0 = English only, non-English falls back to cloud
+VOICE_MAX_MODELS=1          # 1 = swap models, 2 = keep both loaded
+VOICE_CJK_CPS=4.0           # characters/second used by the junk-duration filter
+```
 
 ## Why a resident server
 

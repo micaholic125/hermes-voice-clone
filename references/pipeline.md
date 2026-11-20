@@ -20,6 +20,27 @@ and a lot to a commercial API.
 
 ## 2. Source the audio — the quality ceiling
 
+### Language policy: same language in, same language out
+
+The reference clip and the spoken text must be in the **same language**. Zero-shot
+cloning migrates timbre and speaking habits; it does not migrate accent. Feed it an
+English reference and Chinese text and you get Chinese words in an English mouth.
+
+| Reference | Output | Result |
+|---|---|---|
+| English | English | intended use — best quality |
+| Chinese | Chinese | intended use — best quality |
+| English | Chinese | words correct, accent obviously foreign |
+| Chinese | English | recognisable, wrong vowel space |
+
+So: Chinese users, cut a Chinese reference. English users, cut an English one. If you
+need both, keep **two** reference clips and switch `VOICE_REFERENCE` (or run two
+provider entries) rather than compromising one clip for both.
+
+The server handles the model side automatically — English checkpoints for English, the
+multilingual checkpoint (`language_id`) for everything else — so the only thing you must
+get right by hand is the reference.
+
 The reference is the ceiling; nothing downstream can exceed it. Ranked by usefulness:
 
 1. **Your own recording** — clean, lawful, no separation needed.
@@ -101,8 +122,8 @@ Work down this list in order; each step is cheaper than the next.
 
 1. **Read `server.log`.** The `similarity` score tells you whether the take was
    understood at all before you theorise about timbre.
-2. **Check the language.** CJK into an English model hums; the fallback should have
-   caught it — verify it fired.
+2. **Check the language.** CJK into an English checkpoint hums; the router should have
+   picked the multilingual one — look for `loading multilingual model` in the log.
 3. **Check the reference.** Duration, music residue, one speaker, right person.
 4. **Only then tune** `cfg_weight` (pace) and `exaggeration` (performance), one at a
    time, with `restart` between changes.

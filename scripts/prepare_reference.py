@@ -38,6 +38,20 @@ def duration(path: Path) -> float:
     return float(out)
 
 
+def detect_language(path: Path) -> str | None:
+    """Spoken language of the clip, via Whisper. Optional: None when unavailable."""
+    try:
+        from faster_whisper import WhisperModel
+    except Exception:
+        return None
+    try:
+        model = WhisperModel(cfg.VERIFY_MODEL, device="cpu", compute_type="int8")
+        _, info = model.transcribe(str(path), beam_size=1, vad_filter=True)
+        return getattr(info, "language", None)
+    except Exception:
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("source", type=Path)
@@ -46,6 +60,9 @@ def main() -> int:
     ap.add_argument("--no-separate", action="store_true", help="skip demucs vocal separation")
     ap.add_argument("--out", type=Path, default=cfg.REFERENCE)
     ap.add_argument("--trim-threshold", default="-40dB", help="silence threshold for trim")
+    ap.add_argument("--target-language", default="",
+                    help="language the clone will speak (e.g. zh, en). If given, the "
+                         "reference's spoken language is detected and compared.")
     args = ap.parse_args()
 
     if not args.source.exists():
@@ -101,6 +118,21 @@ def main() -> int:
         print("  WARN        : long reference; the model only uses the opening ~10s")
     if not args.no_separate and "vocals" not in str(stage):
         print("  WARN        : separation did not run; music residue will leak into the voice")
+
+    print("\n  reminder    : the reference should be in the SAME language you will")
+    print("                speak. Cloning transfers timbre, not accent.")
+
+    if args.target_language:
+        detected = detect_language(args.out)
+        if detected is None:
+            print("  language    : could not detect (faster-whisper missing or audio unclear)")
+        else:
+            same = detected.split("-")[0] == args.target_language.split("-")[0]
+            print(f"  language    : detected {detected}, target {args.target_language} "
+                  f"-> {'MATCH' if same else 'MISMATCH'}")
+            if not same:
+                print("  WARN        : the voice will speak with a foreign accent. Re-cut the")
+                print("                reference from a speaker of the target language.")
 
     print("\n  next: python scripts/voice_switch.py on")
     return 0 if ok else 1

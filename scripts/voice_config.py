@@ -45,10 +45,24 @@ MAX_SECONDS = float(os.environ.get("VOICE_MAX_SECONDS", "70"))
 # directory to stay offline.
 VERIFY_MODEL = os.environ.get("VOICE_VERIFY_MODEL", "small")
 
-# --- non-target-language fallback ----------------------------------------
-# The clone model is usually English-only. CJK (or other non-Latin) text goes
-# through a cloud voice instead of being hummed. Set VOICE_FALLBACK_VOICE="" to
-# disable the fallback and return an error instead.
+# --- languages -------------------------------------------------------------
+# English uses the English-only model (best prosody for English). Every other
+# language supported by the multilingual model goes through that one instead, so a
+# single cloned voice can speak more than English.
+#
+# Cross-lingual cloning keeps the TIMBRE but not the native accent: a reference in
+# the same language as the output always sounds markedly better. Documented in
+# references/pipeline.md ("same language in, same language out").
+MULTILINGUAL = os.environ.get("VOICE_MULTILINGUAL", "1").strip().lower() not in ("", "0", "false", "no")
+# 1 = keep one generative model resident and swap when the language changes (8 GB
+# cards); 2 = keep English and multilingual loaded together (needs ~2 GB more VRAM).
+MAX_RESIDENT_MODELS = int(os.environ.get("VOICE_MAX_MODELS", "1"))
+DEFAULT_LANGUAGE = os.environ.get("VOICE_DEFAULT_LANGUAGE", "en")
+# Pace estimate for non-space-delimited scripts (characters per second).
+CJK_CHARS_PER_SECOND = float(os.environ.get("VOICE_CJK_CPS", "4.0"))
+
+# Cloud voice used only when the multilingual model is unavailable for a language.
+# Set VOICE_FALLBACK_VOICE="" to return an error instead of substituting a voice.
 FALLBACK_VOICE = os.environ.get("VOICE_FALLBACK_VOICE", "zh-CN-YunyangNeural")
 FALLBACK_SPEED = float(os.environ.get("VOICE_FALLBACK_SPEED", "0.95"))
 

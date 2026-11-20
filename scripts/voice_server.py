@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import gc
 import json
 import os
 import re
@@ -24,6 +25,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import torch
 import torchaudio
@@ -39,18 +41,71 @@ _WORD_RE = re.compile(r"[a-z0-9']+")
 
 
 # --------------------------------------------------------------- models
-def get_model():
-    """The generative model. Chatterbox is the default; swap this function to use
-    another zero-shot backend (F5-TTS, CosyVoice, GPT-SoVITS, ...) as long as it
-    returns (waveform, sample_rate) from (text, reference_path)."""
-    global _model
-    if _model is None:
-        from chatterbox.tts import ChatterboxTTS
+_models: dict[str, Any] = {}
+_models_lock = threading.Lock()
+
+# Script detection: enough to pick the right model, not a language identifier.
+_SCRIPT_PATTERNS = [
+    ("ja", re.compile(r"[\u3040-\u30ff]")),      # kana first: Japanese also uses han
+    ("zh", re.compile(r"[\u4e00-\u9fff]")),
+    ("ko", re.compile(r"[\uac00-\ud7af]")),
+    ("ru", re.compile(r"[\u0400-\u04ff]")),
+    ("ar", re.compile(r"[\u0600-\u06ff]")),
+    ("he", re.compile(r"[\u0590-\u05ff]")),
+    ("el", re.compile(r"[\u0370-\u03ff]")),
+    ("hi", re.compile(r"[\u0900-\u097f]")),
+]
+
+
+def detect_language(text: str) -> str:
+    for lang, pattern in _SCRIPT_PATTERNS:
+        if pattern.search(text):
+            return lang
+    return cfg.DEFAULT_LANGUAGE
+
+
+def get_model(language: str):
+    """The generative model for this language.
+
+    English -> the English-only checkpoint (best prosody). Anything else -> the
+    multilingual checkpoint, which accepts `language_id`. This function is also the
+    single place to swap in a different backend (CosyVoice, GPT-SoVITS, F5-TTS ...):
+    as long as it returns (waveform, sample_rate) from (text, reference), nothing
+    else in the server has to change.
+    """
+    key = "en" if language == cfg.DEFAULT_LANGUAGE else "multilingual"
+    with _models_lock:
+        model = _models.get(key)
+        if model is not None:
+            return model
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[voice] loading model on {device}", flush=True)
-        _model = ChatterboxTTS.from_pretrained(device=device)
-        print("[voice] model ready", flush=True)
-    return _model
+        print(f"[voice] loading {key} model on {device}", flush=True)
+        if key == "en":
+            from chatterbox.tts import ChatterboxTTS
+            model = ChatterboxTTS.from_pretrained(device=device)
+        else:
+            if not cfg.MULTILINGUAL:
+                raise RuntimeError(
+                    f"language '{language}' needs the multilingual model, but "
+                    "VOICE_MULTILINGUAL is off")
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+            # First non-English request downloads its own weights (~3.7 GB). English-only
+            # users never pay this cost; say so in the log rather than surprising them.
+            print("[voice] multilingual model: loading (first use downloads ~3.7 GB)", flush=True)
+            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+
+        # VRAM: on an 8 GB card both checkpoints plus Whisper is a tight fit, so by
+        # default the previous model is evicted rather than kept alongside.
+        while len(_models) >= max(1, cfg.MAX_RESIDENT_MODELS):
+            evicted = _models.pop(next(iter(_models)))
+            del evicted
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        _models[key] = model
+        print(f"[voice] {key} model ready", flush=True)
+        return model
 
 
 def get_verifier():
@@ -69,24 +124,33 @@ def get_verifier():
 
 
 # --------------------------------------------------------------- helpers
-def has_cjk(text: str) -> bool:
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
-
-
-def expected_seconds(text: str) -> float:
+def expected_seconds(text: str, language: str) -> float:
     """Rough duration for this text at the configured pace. Used only as a junk
     filter, so it is deliberately loose: a 6-word line at 100 wpm is ~3.6 s, and
-    a take of 2.0 s or 7.5 s can both be perfectly good."""
+    a take of 2.0 s or 7.5 s can both be perfectly good.
+
+    Scripts without spaces (Chinese, Japanese, Korean) are measured in characters;
+    counting "words" there returns 1 and would reject every take."""
+    if language != cfg.DEFAULT_LANGUAGE:
+        chars = sum(1 for ch in text if not ch.isspace())
+        return max(1.5, chars / max(1.0, cfg.CJK_CHARS_PER_SECOND))
     words = max(1, len(text.split()))
     return max(1.5, words / (cfg.WORDS_PER_MINUTE / 60.0))
 
 
-def _norm_words(text: str) -> list[str]:
+def _norm_units(text: str) -> list[str]:
+    """Comparison units for the quality gate.
+
+    English compares words; Chinese/Japanese compare characters. Without this split
+    the regex finds no "words" in CJK text, similarity is 0.0, and every take is
+    thrown away even when the audio is perfect."""
+    if any("\u3040" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af" for ch in text):
+        return [ch for ch in text if ch.isalnum()]
     return _WORD_RE.findall(text.lower())
 
 
 def similarity(heard: str, text: str) -> float:
-    a, b = _norm_words(heard), _norm_words(text)
+    a, b = _norm_units(heard), _norm_units(text)
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(a=a, b=b, autojunk=False).ratio()
@@ -127,16 +191,19 @@ def synthesize(text: str, out_path: str, fmt: str = "mp3") -> str:
     if not cfg.REFERENCE.exists():
         raise RuntimeError(f"reference audio missing: {cfg.REFERENCE}")
 
-    if has_cjk(text):
+    language = detect_language(text)
+
+    try:
+        model = get_model(language)
+    except Exception as exc:
+        # Only reached when the multilingual model is disabled or unavailable.
         if not cfg.FALLBACK_VOICE:
-            raise RuntimeError("text contains CJK and VOICE_FALLBACK_VOICE is disabled; "
-                               "the clone model cannot read it")
-        print("[voice] CJK text -> cloud fallback", flush=True)
+            raise
+        print(f"[voice] no model for '{language}' ({exc}) -> cloud fallback", flush=True)
         asyncio.run(cloud_fallback(text, out_path))
         return out_path
 
-    model = get_model()
-    expected = expected_seconds(text)
+    expected = expected_seconds(text, language)
     best: tuple[float, str] | None = None
     started = time.time()
 
@@ -144,16 +211,18 @@ def synthesize(text: str, out_path: str, fmt: str = "mp3") -> str:
         if attempt and time.time() - started > cfg.MAX_SECONDS:
             print(f"[voice] time budget spent after {attempt} takes", flush=True)
             break
-        with _model_lock:
-            wav = model.generate(
-                text,
-                audio_prompt_path=str(cfg.REFERENCE),
-                exaggeration=cfg.EXAGGERATION,
-                cfg_weight=cfg.CFG_WEIGHT,
-                temperature=cfg.TEMPERATURE,
-                min_p=cfg.MIN_P,
-                repetition_penalty=cfg.REPETITION_PENALTY,
-            )
+        kwargs = dict(
+            audio_prompt_path=str(cfg.REFERENCE),
+            exaggeration=cfg.EXAGGERATION,
+            cfg_weight=cfg.CFG_WEIGHT,
+            temperature=cfg.TEMPERATURE,
+            min_p=cfg.MIN_P,
+            repetition_penalty=cfg.REPETITION_PENALTY,
+        )
+        if language != cfg.DEFAULT_LANGUAGE:
+            kwargs["language_id"] = language  # multilingual checkpoint only
+        with _models_lock, _model_lock:
+            wav = model.generate(text, **kwargs)
         dur = wav.shape[-1] / model.sr
 
         fd, take = tempfile.mkstemp(suffix=".wav")
@@ -165,7 +234,7 @@ def synthesize(text: str, out_path: str, fmt: str = "mp3") -> str:
             score, heard = 0.05, f"<implausible length {dur:.1f}s>"
         else:
             try:
-                score, heard = verify_take(take, text)
+                score, heard = verify_take(take, text, language)
             except Exception as exc:
                 print(f"[voice] verifier unavailable ({exc}); length check only", flush=True)
                 score, heard = 1.0, ""

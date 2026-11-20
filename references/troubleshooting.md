@@ -32,7 +32,8 @@ similarity score — that single line answers half of these.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Humming / wordless moaning | CJK or other unsupported text fed to the clone | confirm `CJK text -> cloud fallback` in the log; set `VOICE_FALLBACK_VOICE` |
+| Humming / wordless moaning | text sent to a checkpoint that cannot speak it | look for `loading multilingual model` in the log; if absent, `VOICE_MULTILINGUAL` is off |
+| Chinese sounds foreign | the reference clip is English (timbre transfers, accent does not) | re-cut the reference from a Chinese speaker |
 | Pace wanders between replies | `temperature` at 0.8, or `cfg_weight` changed mid-session | 0.65 and one fixed `cfg_weight`, then `restart` |
 | Sounds like two people | reference contains a second speaker or laughter | re-cut; one speaker only |
 | Metallic sheen | music residue in the reference | re-run `prepare_reference.py` without `--no-separate` |

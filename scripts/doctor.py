@@ -48,12 +48,15 @@ def main() -> int:
         check("torch", "FAIL", f"{type(exc).__name__}: {exc}")
 
     # model deps
-    for mod, why in [("chatterbox", "the cloning backend"), ("faster_whisper", "take grading (optional)")]:
+    for mod, why in [("chatterbox", "the cloning backend"),
+                     ("chatterbox.mtl_tts", "multilingual checkpoint (needed for non-English)"),
+                     ("faster_whisper", "take grading (optional)")]:
         try:
             __import__(mod)
             check(mod, "PASS", why)
         except Exception as exc:
-            check(mod, "WARN" if mod == "faster_whisper" else "FAIL", f"{type(exc).__name__}: {exc}")
+            optional = mod == "faster_whisper" or mod.endswith("mtl_tts")
+            check(mod, "WARN" if optional else "FAIL", f"{type(exc).__name__}: {exc}")
 
     # reference audio
     if not cfg.REFERENCE.exists():
@@ -68,6 +71,18 @@ def main() -> int:
                   f"{cfg.REFERENCE.name}, {secs:.1f}s")
         except Exception as exc:
             check("reference audio", "WARN", f"unreadable: {exc}")
+
+    # non-English readiness: the multilingual checkpoint is separate weights
+    hf_home = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
+    snaps = list((hf_home / "hub" / "models--ResembleAI--chatterbox" / "snapshots").glob("*"))
+    mtl = any(snaps and list(s.glob("*mtl*")) or list(s.glob("grapheme_mtl*")) for s in snaps)
+    if not cfg.MULTILINGUAL:
+        check("non-English", "INFO", "disabled (VOICE_MULTILINGUAL=0); CJK falls back to a cloud voice")
+    elif mtl:
+        check("non-English", "PASS", "multilingual weights cached — send Chinese/Japanese/... directly")
+    else:
+        check("non-English", "INFO",
+              "ready but weights not downloaded: first non-English request fetches ~3.7 GB")
 
     # port + health
     with socket.socket() as s:
